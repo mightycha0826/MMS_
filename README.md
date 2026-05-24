@@ -31,7 +31,7 @@ MMS_/
 ## 전체 아키텍처
 
 ```
-[Unity WebGL — 팀원 담당]          [gemini-relay — 본인 담당]
+[Unity WebGL — 정해운찬/정형태 담당]          [gemini-relay — 차유근 담당]
         │                                    │
   GeminiClient.cs                       index.ts
   (WebSocket + JSON)   ──wss://──▶   (Cloudflare Worker)
