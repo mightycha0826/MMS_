@@ -5,7 +5,7 @@ PDF → Gemini(학과 추론 + 요약) → Gemma-2b-it LoRA → 면접 질문 JS
   pip install google-genai transformers peft torch accelerate pymupdf sentencepiece
 
 사용법:
-  python interview_question_generator.py --file "비터스 AI 부서 6차시-CNN, RNN, LSTM의 핵심 원리와 한계1.pdf" --adapter . --gemini-key "AIzaSyCj8l9-xF2umTBQx6IfAFq_zL7RapeXLfI"
+  python interview_question_generator.py --file "비터스 AI 부서 6차시-CNN, RNN, LSTM의 핵심 원리와 한계1.pdf" --adapter . --gemini-key "my gemini key"
   python interview_test.py --demo
 """
 
