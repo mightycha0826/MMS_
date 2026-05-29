@@ -338,7 +338,7 @@ def gemini_refine_question(
 
     import time
     cfg = types.GenerateContentConfig(
-        max_output_tokens=2048,  # 256은 질문 텍스트 중간에 잘릴 수 있음
+        max_output_tokens=2048,
         temperature=0.1,
     )
     for attempt in range(3):
@@ -348,7 +348,6 @@ def gemini_refine_question(
                 contents=prompt,
                 config=cfg,
             )
-            # response.text가 None인 경우 처리 (gemini-3.5-flash 간헐적 버그)
             if response.text is None:
                 print(f"      [Gemini 검수 실패] response.text=None — fallback 사용")
                 return _make_fallback_question(keywords, topics)
@@ -424,7 +423,6 @@ def load_gemma_lora(adapter_path: str):
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 5단계: 프롬프트 빌드
-# [FIX] keywords, topics 파라미터 추가 — Gemma가 PDF 주제를 인식하도록
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def build_prompt(
@@ -592,7 +590,6 @@ def run_pipeline(file_path: str, adapter_path: str = LORA_ADAPTER_PATH):
     )
     result_dict, raw = run_gemma(prompt, adapter_path)
 
-    # [NEW] Gemini가 초안 검증·최소 수정
     print(f"\n[질문 검수] Gemini 검수 중...")
     draft_q  = result_dict.get("content", {}).get("text", raw)
     final_q  = gemini_refine_question(keywords, topics, draft_q)
@@ -654,7 +651,6 @@ def run_pipeline(file_path: str, adapter_path: str = LORA_ADAPTER_PATH):
         )
         result_dict, raw = run_gemma(prompt, adapter_path)
 
-        # [NEW] Gemini가 초안 검증·최소 수정
         print(f"\n[질문 검수] Gemini 검수 중...")
         draft_q  = result_dict.get("content", {}).get("text", raw)
         final_q  = gemini_refine_question(keywords, topics, draft_q)
