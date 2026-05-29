@@ -1,8 +1,3 @@
-"""
-사용방법:
-python interview_question_generator.py --file "자료.pdf" --adapter . --GEMINI_API_KEY "My Key"
-"""
-
 import argparse
 import json
 import os
@@ -86,10 +81,10 @@ INIT_PROMPT_TMPL = """당신은 대학 입시 면접 보조 AI입니다.
 - topics: 면접에서 독립적으로 다룰 수 있는 주제 5개 이상. "주제명: 핵심 내용 한 문장" 형식 (배열)
 - gemini_summary: 문서 전체 종합 요약. 각 개념의 핵심 원리·상호 관계·취약 포인트 포함. 600자 이내 한국어
 - gemma_hint: Gemma 면접관 AI에게 전달할 첫 질문 생성용 힌트. 반드시 "'키워드' 관련 탐구·실험 경험 확인 필요. 직접 수행한 탐구가 있는지 질문." 형식으로 작성. 50자 이내.
-- opening_comment: 면접관이 자료를 처음 받았을 때 지원자에게 건네는 자연스러운 첫 마디. 자료의 흥미로운 점이나 인상적인 부분을 언급하며 면접 시작을 알리는 1~2문장. 친근하지만 프로페셔널한 어투.
+- opening_remark: 면접관이 자료를 처음 검토하고 느낀 점을 자연스럽게 표현하는 1문장. 자료에서 인상적이거나 흥미로운 구체적 내용을 언급할 것. 예) "CNN부터 트랜스포머까지 직접 실험해보셨다니 꽤 인상적이네요." / "탐구 주제가 굉장히 독특한데, 어떻게 이 방향으로 잡게 됐는지 궁금하기도 하고요."
 
 출력 형식 예시:
-{{"keywords":["키워드1","키워드2"],"topics":["주제1: 설명","주제2: 설명"],"gemini_summary":"요약","gemma_hint":"'합성곱' 키워드 언급했으나 메커니즘 설명 없음. 꼬리질문으로 검증 필요.","opening_comment":"CNN부터 트랜스포머까지 다양한 모델을 직접 실험해보셨군요, 꽤 흥미로운 탐구 이력이네요. 그럼 시작해볼까요?"}}
+{{"keywords":["키워드1","키워드2"],"topics":["주제1: 설명","주제2: 설명"],"gemini_summary":"요약","gemma_hint":"'합성곱' 키워드 언급했으나 메커니즘 설명 없음. 꼬리질문으로 검증 필요.","opening_remark":"CNN부터 트랜스포머까지 직접 실험해보셨다니 꽤 인상적이네요."}}
 
 문서 내용:
 {doc_text}
@@ -119,7 +114,7 @@ def gemini_analyze_file(file_path: str) -> dict:
         try:
             print(f"      [Gemini] 분석 중... (시도 {attempt+1}/3)")
             response = client.models.generate_content(
-                model="gemini-3.5-flash",
+                model="gemini-2.5-flash",
                 contents=prompt,
                 config=cfg,
             )
@@ -201,7 +196,7 @@ def gemini_evaluate_answer(
     for attempt in range(3):
         try:
             response = client.models.generate_content(
-                model="gemini-3.5-flash",
+                model="gemini-2.5-flash",
                 contents=prompt,
                 config=cfg,
             )
@@ -259,6 +254,7 @@ REFINE_PROMPT_TMPL = """당신은 대학 입시 면접 질문 검수 AI입니다
 [면접 주제 목록]:
 {topics}
 [Gemma 초안 질문]: {draft_question}
+[자료 첫인상 멘트 (있을 경우 질문 앞에 자연스럽게 붙일 것)]: {opening_remark}
 
 검수 규칙:
 0. 질문 텍스트 정제 (항상 적용, 해당 표현이 있으면 반드시 modified: true):
@@ -266,10 +262,13 @@ REFINE_PROMPT_TMPL = """당신은 대학 입시 면접 질문 검수 AI입니다
    - "시간이 다 돼서~", "그럼~", "음~", "자~" 등 불필요한 도입 문구 → 제거
    - "이거 말고", "또 다른 질문" 등 맥락 없는 메타 발언 → 제거
    - 정제 후 질문 핵심만 남기고 자연스럽게 다듬을 것
-1. 정제 후 질문이 위 키워드/주제와 관련 있고 탐구·경험·연구를 묻는 방향이면 → modified: true (정제만 적용)
-2. 정제 후에도 키워드/주제와 무관하거나 단순 원리 설명만 요구하면
+1. opening_remark가 있으면 질문 앞에 자연스럽게 붙여서 question 필드에 포함시킬 것 (modified: true)
+   - 예) "탐구 주제가 굉장히 독특하네요. 직접 이 실험을 설계하게 된 계기가 뭔가요?"
+   - 멘트와 질문 사이 흐름이 어색하지 않게 연결할 것
+2. 정제 후 질문이 위 키워드/주제와 관련 있고 탐구·경험·연구를 묻는 방향이면 → modified: true (정제만 적용)
+3. 정제 후에도 키워드/주제와 무관하거나 단순 원리 설명만 요구하면
    → 어투·길이·압박 강도는 유지하되, 탐구·실험·경험을 묻는 방향으로 추가 교정 (modified: true)
-3. 절대로 완전히 새로운 질문을 창작하지 마십시오. 초안을 기반으로만 수정하십시오.
+4. 절대로 완전히 새로운 질문을 창작하지 마십시오. 초안을 기반으로만 수정하십시오.
 
 출력 예시 (이 형식 그대로, 다른 텍스트 없이):
 {{"modified": false, "question": "초안 질문 그대로"}}
@@ -296,6 +295,7 @@ def gemini_refine_question(
     keywords: list,
     topics: list,
     draft_question: str,
+    opening_remark: str = "",
 ) -> str:
     if not draft_question or draft_question == "질문을 생성하지 못했습니다.":
         return _make_fallback_question(keywords, topics)
@@ -309,6 +309,7 @@ def gemini_refine_question(
         keywords=kw_str,
         topics=topic_str,
         draft_question=draft_question,
+        opening_remark=opening_remark,
     )
 
     import time
@@ -319,7 +320,7 @@ def gemini_refine_question(
     for attempt in range(3):
         try:
             response = client.models.generate_content(
-                model="gemini-3.5-flash",
+                model="gemini-2.5-flash",
                 contents=prompt,
                 config=cfg,
             )
@@ -500,30 +501,16 @@ def run_pipeline(file_path: str, adapter_path: str = LORA_ADAPTER_PATH):
         print("\n[오류] 분석 실패. API 키 할당량을 확인하거나 잠시 후 다시 시도하세요.")
         return
 
-    keywords     = gemini_info.get("keywords", [])
-    topics       = gemini_info.get("topics", [])
-    doc_summary  = gemini_info.get("gemini_summary", "")
-    opening      = gemini_info.get("opening_comment", "자료 잘 받았습니다. 그럼 면접을 시작해볼게요.")
+    keywords    = gemini_info.get("keywords", [])
+    topics      = gemini_info.get("topics", [])
+    doc_summary = gemini_info.get("gemini_summary", "")
+    opening_remark = gemini_info.get("opening_remark", "")
 
     print(f"  ▸ 키워드  : {', '.join(keywords)}")
     print(f"  ▸ 주제 목록:")
     for t in topics:
         print(f"      - {t}")
     print(f"  ▸ 요약    : {doc_summary}")
-
-    opening_packet = {
-        "type":       "server_content",
-        "message_id": str(uuid.uuid4()),
-        "content": {
-            "text":           opening,
-            "question":       "",
-            "feedbackComment": opening,
-            "decision":       "opening",
-            "emotionLabel":   "호기심/기대",
-        },
-    }
-    print("\n[오프닝]")
-    print(json.dumps(opening_packet, ensure_ascii=False, indent=2))
 
     print(f"\n[모델 로드] Gemma-2b-it + LoRA 로딩 중...")
     load_gemma_lora(adapter_path)
@@ -543,7 +530,7 @@ def run_pipeline(file_path: str, adapter_path: str = LORA_ADAPTER_PATH):
 
     print(f"\n[질문 검수] Gemini 검수 중...")
     draft_q = result_dict.get("content", {}).get("text", raw)
-    final_q = gemini_refine_question(keywords, topics, draft_q)
+    final_q = gemini_refine_question(keywords, topics, draft_q, opening_remark=opening_remark)
 
     packet = format_output(
         raw_dict=result_dict,
@@ -625,32 +612,18 @@ def run_pipeline(file_path: str, adapter_path: str = LORA_ADAPTER_PATH):
 def demo_without_file():
     print("\n[DEMO MODE] 구조 확인용 — API/모델 호출 없음\n")
 
-    opening_packet = {
-        "type":       "server_content",
-        "message_id": str(uuid.uuid4()),
-        "content": {
-            "text":           "CNN부터 트랜스포머까지 다양한 모델을 직접 실험해보셨군요, 꽤 흥미로운 탐구 이력이네요. 그럼 시작해볼게요.",
-            "question":       "",
-            "feedbackComment": "CNN부터 트랜스포머까지 다양한 모델을 직접 실험해보셨군요, 꽤 흥미로운 탐구 이력이네요. 그럼 시작해볼게요.",
-            "decision":       "opening",
-            "emotionLabel":   "호기심/기대",
-        },
-    }
-    print("[오프닝]")
-    print(json.dumps(opening_packet, ensure_ascii=False, indent=2))
-
     mock_q1_packet = {
         "type":       "server_content",
         "message_id": str(uuid.uuid4()),
         "content": {
-            "text":           "LSTM에서 Cell State가 기울기 소실 문제를 해결하는 원리를, 직접 실험하거나 탐구해본 경험이 있다면 말씀해주세요.",
-            "question":       "LSTM에서 Cell State가 기울기 소실 문제를 해결하는 원리를, 직접 실험하거나 탐구해본 경험이 있다면 말씀해주세요.",
+            "text":           "CNN부터 트랜스포머까지 직접 실험해보셨다니 꽤 인상적이네요. LSTM에서 Cell State가 기울기 소실 문제를 해결하는 원리를 직접 탐구하거나 실험해본 경험이 있다면 말씀해주세요.",
+            "question":       "LSTM에서 Cell State가 기울기 소실 문제를 해결하는 원리를 직접 탐구하거나 실험해본 경험이 있다면 말씀해주세요.",
             "feedbackComment": "",
             "decision":       "follow_up",
             "emotionLabel":   "호기심/탐색",
         },
     }
-    print("\n[Q1]")
+    print("[Q1]")
     print(json.dumps(mock_q1_packet, ensure_ascii=False, indent=2))
 
     print("\n--- 가상 답변: 'forget gate가 이전 상태를 지웁니다' ---")
