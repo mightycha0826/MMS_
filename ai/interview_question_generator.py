@@ -1,15 +1,6 @@
 """
-PDF → Gemini(학과 추론 + 요약)
-    → Gemma(질문 초안 생성)
-    → Gemini(초안 관련성 검증 + 최소 수정)
-    → [CLI 답변 → Gemini 평가 → Gemma 초안 → Gemini 수정] 루프
-
-설치:
-  pip install google-genai transformers peft torch accelerate pymupdf sentencepiece
-
-사용법:
-  python interview_question_generator.py --file 자료.pdf --adapter . --gemini-key YOUR_KEY
-  python interview_question_generator.py --demo
+사용방법:
+python interview_question_generator.py --file "자료.pdf" --adapter . --GEMINI_API_KEY "My Key"
 """
 
 import argparse
@@ -26,15 +17,10 @@ from peft import PeftModel
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 설정
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 GEMINI_API_KEY    = os.environ.get("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY_HERE")
 LORA_ADAPTER_PATH = os.environ.get("LORA_ADAPTER_PATH", "./lora_adapter")
 BASE_MODEL_ID     = "google/gemma-2b-it"
 
-# 학습 데이터에서 추출한 system prompt — 원문 그대로
 SYSTEM_PROMPT = (
     "당신은 대학 입시 면접관 AI입니다.\n"
     "Gemini 분석 결과와 직전 면접 맥락을 입력받아,\n"
@@ -50,10 +36,15 @@ SYSTEM_PROMPT = (
     "출력은 반드시 유효한 JSON 하나만 생성하십시오. 설명/마크다운 절대 금지."
 )
 
+EMOTIONS = {
+    "압박":   {"action": "avatar_stern",   "examples": ["날카로움/압박", "압박/재질문"]},
+    "호기심": {"action": "avatar_curious", "examples": ["호기심/탐색", "호기심/기대"]},
+    "기쁨":   {"action": "avatar_smile",   "examples": ["기쁨/격려", "기쁨/지지"]},
+    "당혹":   {"action": "avatar_tilt",    "examples": ["당혹/재질문", "당혹/확인"]},
+    "중립":   {"action": "avatar_neutral", "examples": ["중립/전환", "중립/마무리"]},
+    "정중":   {"action": "avatar_nod",     "examples": ["정중함/마무리", "정중/전환"]},
+}
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 1단계: PDF 텍스트 추출
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def extract_pdf_text(file_path: str) -> str:
     import fitz
@@ -86,31 +77,25 @@ def extract_text(file_path: str) -> str:
         raise ValueError(f"지원하지 않는 파일 형식: {ext} (pdf, pptx만 가능)")
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 2단계: Gemini — PDF 초기 분석 (1회)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 INIT_PROMPT_TMPL = """당신은 대학 입시 면접 보조 AI입니다.
 아래 문서를 분석하고, 반드시 순수 JSON만 출력하십시오.
 마크다운/코드블록/설명 절대 금지. 출력의 첫 글자는 반드시 {{ 이어야 합니다.
 
 필드 설명:
-- dept: 지원 학과명 (문서에 없으면 내용 기반 추론)
-- dept_reasoning: 학과 추론 근거 한 문장
 - keywords: 면접 질문 소재가 될 구체적 기술 용어 10개 이상 (배열)
 - topics: 면접에서 독립적으로 다룰 수 있는 주제 5개 이상. "주제명: 핵심 내용 한 문장" 형식 (배열)
 - gemini_summary: 문서 전체 종합 요약. 각 개념의 핵심 원리·상호 관계·취약 포인트 포함. 600자 이내 한국어
 - gemma_hint: Gemma 면접관 AI에게 전달할 첫 질문 생성용 힌트. 반드시 "'키워드' 관련 탐구·실험 경험 확인 필요. 직접 수행한 탐구가 있는지 질문." 형식으로 작성. 50자 이내.
+- opening_comment: 면접관이 자료를 처음 받았을 때 지원자에게 건네는 자연스러운 첫 마디. 자료의 흥미로운 점이나 인상적인 부분을 언급하며 면접 시작을 알리는 1~2문장. 친근하지만 프로페셔널한 어투.
 
 출력 형식 예시:
-{{"dept":"학과명","dept_reasoning":"근거","keywords":["키워드1","키워드2"],"topics":["주제1: 설명","주제2: 설명"],"gemini_summary":"요약","gemma_hint":"'합성곱' 키워드 언급했으나 메커니즘 설명 없음. 꼬리질문으로 검증 필요."}}
+{{"keywords":["키워드1","키워드2"],"topics":["주제1: 설명","주제2: 설명"],"gemini_summary":"요약","gemma_hint":"'합성곱' 키워드 언급했으나 메커니즘 설명 없음. 꼬리질문으로 검증 필요.","opening_comment":"CNN부터 트랜스포머까지 다양한 모델을 직접 실험해보셨군요, 꽤 흥미로운 탐구 이력이네요. 그럼 시작해볼까요?"}}
 
 문서 내용:
 {doc_text}
 """
 
 def gemini_analyze_file(file_path: str) -> dict:
-    """PDF/PPTX를 분석해 키워드·요약 반환 (면접 시작 시 1회 호출)"""
     client = genai.Client(api_key=GEMINI_API_KEY)
 
     try:
@@ -121,7 +106,7 @@ def gemini_analyze_file(file_path: str) -> dict:
 
     if not raw_text.strip():
         print(f"      [경고] 텍스트가 비어있습니다. 파일을 확인해주세요.")
-        return {"dept": "미분류", "dept_reasoning": "분석 실패", "keywords": [], "gemini_summary": ""}
+        return {"keywords": [], "gemini_summary": ""}
 
     prompt = INIT_PROMPT_TMPL.format(doc_text=raw_text[:12000])
 
@@ -153,10 +138,6 @@ def gemini_analyze_file(file_path: str) -> dict:
     return None
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 3단계: Gemini — 답변 평가 (매 턴)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 EVAL_PROMPT_TMPL = """당신은 대학 입시 면접 보조 AI입니다.
 지원자 답변을 평가하고, 반드시 순수 JSON만 출력하십시오.
 마크다운/코드블록/설명 절대 금지. 출력의 첫 글자는 반드시 {{ 이어야 합니다.
@@ -172,8 +153,22 @@ EVAL_PROMPT_TMPL = """당신은 대학 입시 면접 보조 AI입니다.
 - follow_up: 답변이 모호하거나 깊이가 부족한 경우
 - next_topic: 답변이 충분히 구체적인 경우 → 주제 목록에서 아직 안 다룬 주제 선택
 
+감정 선택 기준 (emotionLabel):
+- 답변이 훌륭하고 구체적일 때: "기쁨/격려" 또는 "호기심/기대"
+- 답변이 흥미로운 방향을 제시할 때: "호기심/탐색"
+- 답변이 모호하거나 핵심을 빗나갈 때: "당혹/확인" 또는 "압박/재질문"
+- 날카롭게 추가 검증이 필요할 때: "날카로움/압박"
+- 새 주제로 자연스럽게 전환할 때: "정중함/마무리" 또는 "중립/전환"
+- 예상 밖의 좋은 답변이 나왔을 때: "기쁨/지지"
+
+feedback_comment 작성 기준:
+- follow_up인 경우: 어떤 부분이 부족했는지 구체적으로 언급하고, 그래서 어떤 방향으로 다시 물어볼지 자연스럽게 연결. 예) "말씀하신 내용에서 실제 실험 과정이 잘 안 보여서요, 좀 더 구체적으로 여쭤볼게요."
+- next_topic인 경우: 답변이 충분했음을 간단히 인정하고 다음 주제로 넘어감을 알림. 예) "네, 충분히 이해했습니다. 그럼 다른 부분으로 넘어가볼게요."
+- 훌륭한 답변일 때: 진심 어린 칭찬 한 마디 포함. 예) "오, 그 부분까지 직접 검토하셨군요. 인상적입니다."
+- 1~2문장 이내, 자연스러운 면접관 어투
+
 출력 형식 예시:
-{{"decision":"follow_up","gemini_summary":"'키워드' 키워드 언급했으나 설명 부족. 검증 필요. 또는 다음 주제: 주제명. 핵심 내용. 100자 이내."}}
+{{"decision":"follow_up","emotionLabel":"당혹/확인","feedback_comment":"말씀하신 내용에서 실험 결과 해석 부분이 좀 불분명했는데요, 그 부분을 좀 더 여쭤볼게요.","gemini_summary":"'키워드' 키워드 언급했으나 설명 부족. 검증 필요. 또는 다음 주제: 주제명. 핵심 내용. 100자 이내."}}
 
 gemini_summary는 반드시 Gemma 학습 형식에 맞게 작성하십시오:
 - follow_up: "'[키워드]' 관련 탐구 경험 언급했으나 [구체성이 부족한 점]. 탐구 과정/결과 꼬리질문 필요."
@@ -188,7 +183,6 @@ def gemini_evaluate_answer(
     question: str,
     answer: str,
 ) -> dict:
-    """지원자 답변을 평가해 follow_up/next_topic + 새 summary 반환"""
     client = genai.Client(api_key=GEMINI_API_KEY)
 
     prompt = EVAL_PROMPT_TMPL.format(
@@ -225,25 +219,18 @@ def gemini_evaluate_answer(
                 time.sleep(wait)
             else:
                 print(f"      [Gemini 평가 실패] {e}")
-                return {"decision": "follow_up", "gemini_summary": doc_summary}
-    return {"decision": "follow_up", "gemini_summary": doc_summary}
+                return {"decision": "follow_up", "emotionLabel": "중립/전환", "feedback_comment": "", "gemini_summary": doc_summary}
+    return {"decision": "follow_up", "emotionLabel": "중립/전환", "feedback_comment": "", "gemini_summary": doc_summary}
 
 
 def _parse_gemini_json(text: str) -> dict:
-    """
-    Gemini 응답에서 JSON 객체를 추출한다.
-    gemini-3.5-flash 는 response_mime_type 설정에도
-    'Here is the JSON:\n```json\n{...}\n```' 형태로 답할 수 있음.
-    """
     text = text.strip()
 
-    # 1) 직접 파싱
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # 2) 마크다운 코드블록 전체 제거 후 파싱
     cleaned = re.sub(r"```(?:json)?\s*", "", text)
     cleaned = re.sub(r"```", "", cleaned).strip()
     try:
@@ -251,7 +238,6 @@ def _parse_gemini_json(text: str) -> dict:
     except json.JSONDecodeError:
         pass
 
-    # 3) 텍스트 안에서 { ... } 블록 직접 탐색 (첫 { 부터 마지막 } 까지)
     start = text.find("{")
     end   = text.rfind("}")
     if start != -1 and end != -1 and end > start:
@@ -263,10 +249,6 @@ def _parse_gemini_json(text: str) -> dict:
     print(f"      [Gemini JSON 파싱 실패] 원본: {text[:200]}")
     return {}
 
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 3-B단계: Gemini — Gemma 초안 질문 검증 및 최소 수정
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 REFINE_PROMPT_TMPL = """당신은 대학 입시 면접 질문 검수 AI입니다.
 아래 지시를 따르고, 출력은 반드시 JSON 객체 하나만 작성하십시오.
@@ -287,9 +269,6 @@ REFINE_PROMPT_TMPL = """당신은 대학 입시 면접 질문 검수 AI입니다
 1. 정제 후 질문이 위 키워드/주제와 관련 있고 탐구·경험·연구를 묻는 방향이면 → modified: true (정제만 적용)
 2. 정제 후에도 키워드/주제와 무관하거나 단순 원리 설명만 요구하면
    → 어투·길이·압박 강도는 유지하되, 탐구·실험·경험을 묻는 방향으로 추가 교정 (modified: true)
-   - 예) "CNN의 합성곱 원리를 설명해보세요" → "CNN을 활용한 탐구나 실험을 직접 해본 적 있나요?"
-   - 예) "LSTM 게이트 구조를 설명하세요" → "LSTM 관련 프로젝트나 실험에서 겪은 어려움이 있었나요?"
-   - 예) "RNN의 한계를 말해보세요" → "RNN의 한계를 직접 탐구하거나 느꼈던 경험이 있다면 말해보세요."
 3. 절대로 완전히 새로운 질문을 창작하지 마십시오. 초안을 기반으로만 수정하십시오.
 
 출력 예시 (이 형식 그대로, 다른 텍스트 없이):
@@ -297,16 +276,13 @@ REFINE_PROMPT_TMPL = """당신은 대학 입시 면접 질문 검수 AI입니다
 {{"modified": true, "question": "수정된 질문"}}
 """
 
-# fallback 질문 풀 — topics에서 매번 다른 항목 사용
 _fallback_topic_idx = 0
 
 def _make_fallback_question(keywords: list, topics: list) -> str:
-    """topics를 순환하며 fallback 질문 생성 (매 호출마다 다른 주제)"""
     global _fallback_topic_idx
     if topics:
         topic = topics[_fallback_topic_idx % len(topics)]
         _fallback_topic_idx += 1
-        # topics 형식: "주제명: 핵심 내용" — 주제명만 추출
         topic_name = topic.split(":")[0].strip()
         return f"{topic_name}에 대해 구체적으로 설명해보세요."
     if keywords:
@@ -321,7 +297,6 @@ def gemini_refine_question(
     topics: list,
     draft_question: str,
 ) -> str:
-    """Gemma 초안 질문을 PDF 키워드 기준으로 검증·최소 수정 후 최종 질문 반환"""
     if not draft_question or draft_question == "질문을 생성하지 못했습니다.":
         return _make_fallback_question(keywords, topics)
 
@@ -370,7 +345,6 @@ def gemini_refine_question(
 
                 return refined
 
-            # JSON 파싱 완전 실패
             print(f"      [Gemini 검수 파싱 실패] 원본 앞 100자: {raw[:100]!r}")
             fallback = _make_fallback_question(keywords, topics)
             print(f"      [Gemini 검수 실패] topics fallback 사용: {fallback!r}")
@@ -388,10 +362,6 @@ def gemini_refine_question(
 
     return _make_fallback_question(keywords, topics)
 
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 4단계: Gemma LoRA 로드 (싱글턴)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 _model     = None
 _tokenizer = None
@@ -421,20 +391,14 @@ def load_gemma_lora(adapter_path: str):
     return model, tokenizer
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 5단계: 프롬프트 빌드
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 def build_prompt(
     prev_question: str,
     gemini_summary: str,
     keywords: list = None,
     topics: list = None,
 ) -> str:
-    # 학습 데이터 형식에 맞게 gemini_summary를 150자로 압축
     summary_short = gemini_summary[:150].rstrip()
 
-    # 키워드 최대 8개, 주제 최대 3개만 포함 (토큰 예산 절약)
     kw_str    = ", ".join((keywords or [])[:8])
     topic_str = "\n".join(f"  - {t}" for t in (topics or [])[:3])
 
@@ -450,10 +414,6 @@ def build_prompt(
         f"<start_of_turn>model\n"
     )
 
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 6단계: Gemma 추론
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def run_gemma(prompt_text: str, adapter_path: str, max_new_tokens: int = 300) -> tuple[dict, str]:
     model, tokenizer = load_gemma_lora(adapter_path)
@@ -490,7 +450,6 @@ def run_gemma(prompt_text: str, adapter_path: str, max_new_tokens: int = 300) ->
         except json.JSONDecodeError:
             pass
 
-    # JSON 파싱 실패 — 첫 줄만 질문 텍스트로 사용 (raw 전체 넘기지 않음)
     first_line = raw_text.split("\n")[0].strip()
     fallback_q = first_line if first_line else "답변 내용에 대해 더 구체적으로 설명해보세요."
     return {
@@ -502,50 +461,32 @@ def run_gemma(prompt_text: str, adapter_path: str, max_new_tokens: int = 300) ->
     }, raw_text
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 7단계: 출력 패킷 조립
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-def _emotion_to_action(label: str) -> str:
-    for key, action in {
-        "날카로움": "avatar_stern",   "압박":   "avatar_stern",
-        "정중함":   "avatar_nod",     "마무리":  "avatar_nod",
-        "중립":     "avatar_neutral", "전환":   "avatar_neutral",
-        "격려":     "avatar_smile",   "지지":   "avatar_smile",
-        "당혹":     "avatar_tilt",    "재질문":  "avatar_tilt",
-    }.items():
+def _emotion_label_to_action(label: str) -> str:
+    for key, data in EMOTIONS.items():
         if key in label:
-            return action
+            return data["action"]
     return "avatar_neutral"
 
-def format_output(raw_dict: dict, gemini_info: dict, decision: str = "") -> dict:
-    content = raw_dict.get("content", {})
-    emotion = content.get("emotion", {})
+
+def format_output(
+    raw_dict: dict,
+    decision: str,
+    emotion_label: str,
+    feedback_comment: str,
+    final_question: str,
+) -> dict:
     return {
         "type":       "server_content",
         "message_id": raw_dict.get("message_id", str(uuid.uuid4())),
         "content": {
-            "text":     content.get("text", ""),
-            "decision": decision or content.get("decision", "follow_up"),
-            "emotion": {
-                "label":     emotion.get("label", "중립/전환"),
-                "score":     round(float(emotion.get("score", 0.7)), 2),
-                "intensity": emotion.get("intensity", "medium"),
-                "action":    _emotion_to_action(emotion.get("label", "")),
-            },
+            "text":           feedback_comment + " " + final_question if feedback_comment else final_question,
+            "question":       final_question,
+            "feedbackComment": feedback_comment,
+            "decision":       decision,
+            "emotionLabel":   emotion_label,
         },
-        "gemini_analysis": {
-            "dept":     gemini_info.get("dept", ""),
-            "keywords": gemini_info.get("keywords", []),
-            "summary":  gemini_info.get("gemini_summary", ""),
-        },
-        "usage": {"timestamp": datetime.now(timezone.utc).isoformat()},
     }
 
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 메인 파이프라인 (인터랙티브 루프)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def run_pipeline(file_path: str, adapter_path: str = LORA_ADAPTER_PATH):
     print("\n" + "═" * 62)
@@ -553,30 +494,40 @@ def run_pipeline(file_path: str, adapter_path: str = LORA_ADAPTER_PATH):
     print("  종료: q 입력 후 Enter")
     print("═" * 62)
 
-    # ── 초기 PDF 분석 (1회) ────────────────────────────────────────────────
     print(f"\n[초기 분석] 파일 읽는 중... ({Path(file_path).name})")
     gemini_info = gemini_analyze_file(file_path)
     if gemini_info is None:
         print("\n[오류] 분석 실패. API 키 할당량을 확인하거나 잠시 후 다시 시도하세요.")
         return
 
-    dept        = gemini_info.get("dept", "미분류")
-    keywords    = gemini_info.get("keywords", [])
-    topics      = gemini_info.get("topics", [])
-    doc_summary = gemini_info.get("gemini_summary", "")
+    keywords     = gemini_info.get("keywords", [])
+    topics       = gemini_info.get("topics", [])
+    doc_summary  = gemini_info.get("gemini_summary", "")
+    opening      = gemini_info.get("opening_comment", "자료 잘 받았습니다. 그럼 면접을 시작해볼게요.")
 
-    print(f"  ▸ 학과    : {dept}")
     print(f"  ▸ 키워드  : {', '.join(keywords)}")
     print(f"  ▸ 주제 목록:")
     for t in topics:
         print(f"      - {t}")
     print(f"  ▸ 요약    : {doc_summary}")
 
-    # ── Gemma 모델 미리 로드 ──────────────────────────────────────────────
+    opening_packet = {
+        "type":       "server_content",
+        "message_id": str(uuid.uuid4()),
+        "content": {
+            "text":           opening,
+            "question":       "",
+            "feedbackComment": opening,
+            "decision":       "opening",
+            "emotionLabel":   "호기심/기대",
+        },
+    }
+    print("\n[오프닝]")
+    print(json.dumps(opening_packet, ensure_ascii=False, indent=2))
+
     print(f"\n[모델 로드] Gemma-2b-it + LoRA 로딩 중...")
     load_gemma_lora(adapter_path)
 
-    # ── 첫 질문 생성 ─────────────────────────────────────────────────────
     print(f"\n[질문 생성] 첫 번째 질문 생성 중...")
     gemma_hint = gemini_info.get("gemma_hint", "")
     if not gemma_hint and keywords:
@@ -591,20 +542,24 @@ def run_pipeline(file_path: str, adapter_path: str = LORA_ADAPTER_PATH):
     result_dict, raw = run_gemma(prompt, adapter_path)
 
     print(f"\n[질문 검수] Gemini 검수 중...")
-    draft_q  = result_dict.get("content", {}).get("text", raw)
-    final_q  = gemini_refine_question(keywords, topics, draft_q)
-    result_dict.setdefault("content", {})["text"] = final_q
+    draft_q = result_dict.get("content", {}).get("text", raw)
+    final_q = gemini_refine_question(keywords, topics, draft_q)
 
-    packet      = format_output(result_dict, gemini_info, decision="follow_up")
+    packet = format_output(
+        raw_dict=result_dict,
+        decision="follow_up",
+        emotion_label="호기심/탐색",
+        feedback_comment="",
+        final_question=final_q,
+    )
 
     turn             = 1
     current_summary  = doc_summary
-    current_question = packet["content"]["text"]
+    current_question = packet["content"]["question"]
 
-    # ── 인터랙티브 루프 ───────────────────────────────────────────────────
     while True:
         print("\n" + "─" * 62)
-        print(f"  [Q{turn}] {current_question}")
+        print(f"  [Q{turn}] {packet['content']['text']}")
         print("─" * 62)
         print(json.dumps(packet, ensure_ascii=False, indent=2))
         print()
@@ -623,7 +578,6 @@ def run_pipeline(file_path: str, adapter_path: str = LORA_ADAPTER_PATH):
             print("  (답변이 없습니다. 다시 입력해주세요.)")
             continue
 
-        # ── Gemini: 답변 평가 ─────────────────────────────────────────────
         print(f"\n[Gemini 평가] 답변 분석 중...")
         eval_result = gemini_evaluate_answer(
             keywords=keywords,
@@ -632,14 +586,17 @@ def run_pipeline(file_path: str, adapter_path: str = LORA_ADAPTER_PATH):
             question=current_question,
             answer=answer,
         )
-        decision        = eval_result.get("decision", "follow_up")
-        current_summary = eval_result.get("gemini_summary", current_summary)
+        decision         = eval_result.get("decision", "follow_up")
+        emotion_label    = eval_result.get("emotionLabel", "중립/전환")
+        feedback_comment = eval_result.get("feedback_comment", "")
+        current_summary  = eval_result.get("gemini_summary", current_summary)
 
         label = "꼬리질문" if decision == "follow_up" else "새 주제"
         print(f"  ▸ 판단    : {decision}  ({label})")
+        print(f"  ▸ 감정    : {emotion_label}")
+        print(f"  ▸ 피드백  : {feedback_comment}")
         print(f"  ▸ 새 요약 : {current_summary}")
 
-        # ── Gemma: 다음 질문 생성 ─────────────────────────────────────────
         turn += 1
         print(f"\n[질문 생성] Q{turn} 생성 중...")
 
@@ -652,45 +609,66 @@ def run_pipeline(file_path: str, adapter_path: str = LORA_ADAPTER_PATH):
         result_dict, raw = run_gemma(prompt, adapter_path)
 
         print(f"\n[질문 검수] Gemini 검수 중...")
-        draft_q  = result_dict.get("content", {}).get("text", raw)
-        final_q  = gemini_refine_question(keywords, topics, draft_q)
-        result_dict.setdefault("content", {})["text"] = final_q
+        draft_q = result_dict.get("content", {}).get("text", raw)
+        final_q = gemini_refine_question(keywords, topics, draft_q)
 
-        packet           = format_output(result_dict, gemini_info, decision=decision)
-        current_question = packet["content"]["text"]
+        packet = format_output(
+            raw_dict=result_dict,
+            decision=decision,
+            emotion_label=emotion_label,
+            feedback_comment=feedback_comment,
+            final_question=final_q,
+        )
+        current_question = packet["content"]["question"]
 
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 데모 모드
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def demo_without_file():
     print("\n[DEMO MODE] 구조 확인용 — API/모델 호출 없음\n")
-    mock_info = {
-        "dept": "인공지능학과",
-        "keywords": ["CNN", "RNN", "LSTM"],
-        "gemini_summary": "CNN 합성곱 연산, RNN 순환 구조, LSTM 게이트 메커니즘 설명. LSTM Cell State 기울기 소실 해결 방식 검증 필요.",
-    }
-    mock_raw = {
-        "type": "server_content", "message_id": str(uuid.uuid4()),
+
+    opening_packet = {
+        "type":       "server_content",
+        "message_id": str(uuid.uuid4()),
         "content": {
-            "text":    "LSTM에서 Cell State가 기울기 소실 문제를 해결하는 원리를 수식 수준으로 설명해보세요.",
-            "emotion": {"label": "날카로움/압박", "score": 0.88, "intensity": "high"},
+            "text":           "CNN부터 트랜스포머까지 다양한 모델을 직접 실험해보셨군요, 꽤 흥미로운 탐구 이력이네요. 그럼 시작해볼게요.",
+            "question":       "",
+            "feedbackComment": "CNN부터 트랜스포머까지 다양한 모델을 직접 실험해보셨군요, 꽤 흥미로운 탐구 이력이네요. 그럼 시작해볼게요.",
+            "decision":       "opening",
+            "emotionLabel":   "호기심/기대",
         },
     }
-    packet = format_output(mock_raw, mock_info, decision="follow_up")
-    print("[Q1]", packet["content"]["text"])
-    print(json.dumps(packet, ensure_ascii=False, indent=2))
+    print("[오프닝]")
+    print(json.dumps(opening_packet, ensure_ascii=False, indent=2))
+
+    mock_q1_packet = {
+        "type":       "server_content",
+        "message_id": str(uuid.uuid4()),
+        "content": {
+            "text":           "LSTM에서 Cell State가 기울기 소실 문제를 해결하는 원리를, 직접 실험하거나 탐구해본 경험이 있다면 말씀해주세요.",
+            "question":       "LSTM에서 Cell State가 기울기 소실 문제를 해결하는 원리를, 직접 실험하거나 탐구해본 경험이 있다면 말씀해주세요.",
+            "feedbackComment": "",
+            "decision":       "follow_up",
+            "emotionLabel":   "호기심/탐색",
+        },
+    }
+    print("\n[Q1]")
+    print(json.dumps(mock_q1_packet, ensure_ascii=False, indent=2))
 
     print("\n--- 가상 답변: 'forget gate가 이전 상태를 지웁니다' ---")
-    mock_eval = {"decision": "follow_up", "gemini_summary": "forget gate 언급했으나 수식 설명 없음. 구체적 게이트 연산 검증 필요."}
-    print(f"Gemini 판단: {mock_eval['decision']}")
-    print(f"새 요약: {mock_eval['gemini_summary']}")
 
+    mock_q2_packet = {
+        "type":       "server_content",
+        "message_id": str(uuid.uuid4()),
+        "content": {
+            "text":           "forget gate 언급은 좋았는데, 실제로 수식 수준에서 어떻게 작동하는지는 조금 불분명했어요. 그 부분을 좀 더 여쭤볼게요. 구체적으로 forget gate의 연산 과정을 직접 구현하거나 분석해보신 적 있나요?",
+            "question":       "구체적으로 forget gate의 연산 과정을 직접 구현하거나 분석해보신 적 있나요?",
+            "feedbackComment": "forget gate 언급은 좋았는데, 실제로 수식 수준에서 어떻게 작동하는지는 조금 불분명했어요. 그 부분을 좀 더 여쭤볼게요.",
+            "decision":       "follow_up",
+            "emotionLabel":   "당혹/확인",
+        },
+    }
+    print("\n[Q2]")
+    print(json.dumps(mock_q2_packet, ensure_ascii=False, indent=2))
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CLI
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="PDF → Gemini → Gemma LoRA 면접 시뮬레이터")
