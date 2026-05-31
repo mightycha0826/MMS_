@@ -3,28 +3,25 @@ using System.Collections;
 using System.Runtime.InteropServices;
 using UnityEngine;
 using NativeWebSocket;
+using System.Threading.Tasks;
 
 /// <summary>
 /// gemini-relay Cloudflare Worker와 WebSocket으로 통신하는 클라이언트.
-/// 면접 세션 시작, 지원자 답변 전송, 결과 수신 + TTS 재생을 담당합니다.
+/// 면접 세션 시작, 지원자 답변 전송(STT), 결과 수신 + TTS 재생을 담당합니다.
+/// 화면 표현(면접관/자막/마이크)은 Helper 싱글톤으로 위임합니다.
 /// </summary>
 public class GeminiClient : MonoBehaviour
 {
     [Header("Relay 설정")]
     [SerializeField] private string relayUrl = "wss://gemini-relay.mightycha0826.workers.dev";
 
-    [Header("연결 컴포넌트")]
-    [SerializeField] private InterviewerController interviewer;
-    [SerializeField] private SubtitleManager       subtitleManager;
-    [SerializeField] private MicDisplayController  micDisplay;
-
     public event Action<ServerMsg> OnServerContent;
-    public event Action           OnReady;
-    public event Action           OnProcessing;
-    public event Action<string>   OnError;
+    public event Action OnReady;
+    public event Action OnProcessing;
+    public event Action<string> OnError;
 
     private WebSocket _ws;
-    private bool      _isReady;
+    private bool _isReady;
 
     // ─── JS 브리지 (Web Speech API) ───────────────────────────────────────
 
@@ -33,16 +30,25 @@ public class GeminiClient : MonoBehaviour
     [DllImport("__Internal")] private static extern void JS_StopSTT();
     [DllImport("__Internal")] private static extern void JS_Speak(string text);
 #else
-    private static void JS_StartSTT()           => Debug.Log("[GeminiClient] STT 시작 (에디터 모의)");
-    private static void JS_StopSTT()            => Debug.Log("[GeminiClient] STT 중지 (에디터 모의)");
-    private static void JS_Speak(string text)   => Debug.Log($"[GeminiClient] TTS: {text}");
+    private static void JS_StartSTT() => Debug.Log("[GeminiClient] STT 시작 (에디터 모의)");
+    private static void JS_StopSTT() => Debug.Log("[GeminiClient] STT 중지 (에디터 모의)");
+    private static void JS_Speak(string text) => Debug.Log($"[GeminiClient] TTS: {text}");
 #endif
 
     // ─── 생명주기 ──────────────────────────────────────────────────────────
 
-    private async void Start()
+    private async Task Start()
     {
-        await Connect();
+        try
+        {
+            // Connect가 끝날 때까지 기다림
+            await Connect();
+        }
+        catch (System.Exception e)
+        {
+            // 비동기 함수 내부에서 터진 에러를 강제로 출력
+            Debug.LogError($"[GeminiClient] 에러 발생: {e.Message}\n{e.StackTrace}");
+        }
     }
 
     private void Update()
@@ -64,10 +70,10 @@ public class GeminiClient : MonoBehaviour
     {
         _ws = new WebSocket(relayUrl);
 
-        _ws.OnOpen    += HandleOpen;
+        _ws.OnOpen += HandleOpen;
         _ws.OnMessage += HandleMessage;
-        _ws.OnError   += HandleError;
-        _ws.OnClose   += HandleClose;
+        _ws.OnError += HandleError;
+        _ws.OnClose += HandleClose;
 
         Debug.Log($"[GeminiClient] 연결 중... {relayUrl}");
         await _ws.Connect();
@@ -80,7 +86,7 @@ public class GeminiClient : MonoBehaviour
     {
         Send(JsonUtility.ToJson(new SessionStartPacket
         {
-            type          = "session_start",
+            type = "session_start",
             last_question = lastQuestion,
         }));
     }
@@ -103,28 +109,20 @@ public class GeminiClient : MonoBehaviour
     /// <summary>마이크 녹음을 시작합니다 (Web Speech API STT).</summary>
     public void StartListening()
     {
-        micDisplay?.SetState(MicDisplayController.WaveState.Listening);
+        Helper.Instance.SetMicState(MicDisplayController.WaveState.Listening);
         JS_StartSTT();
     }
 
     /// <summary>마이크 녹음을 중지합니다.</summary>
     public void StopListening()
     {
-        micDisplay?.SetState(MicDisplayController.WaveState.Done);
+        Helper.Instance.SetMicState(MicDisplayController.WaveState.Done);
         JS_StopSTT();
     }
 
     /// <summary>
-    /// JS TTS 재생이 끝났을 때 호출됩니다 (WebSpeech.jslib → SendMessage).
-    /// </summary>
-    public void OnTTSEnd(string _)
-    {
-        interviewer?.StopSpeaking();
-    }
-
-    /// <summary>
     /// JS에서 STT 결과를 받을 때 호출됩니다.
-    /// WebGL JS → C# 브리지 메서드 (SendMessage 방식).
+    /// WebGL JS → C# 브리지 메서드 (WebSpeech.jslib의 SendMessage 방식).
     /// </summary>
     public void OnSpeechResult(string text)
     {
@@ -132,6 +130,14 @@ public class GeminiClient : MonoBehaviour
         Debug.Log($"[GeminiClient] STT 결과: {text}");
         StopListening();
         SendUserSpeech(text);
+    }
+
+    /// <summary>
+    /// JS TTS 재생이 끝났을 때 호출됩니다 (WebSpeech.jslib → SendMessage).
+    /// </summary>
+    public void OnTTSEnd(string _)
+    {
+        Helper.Instance.StopSpeaking();
     }
 
     // ─── 송신 ──────────────────────────────────────────────────────────────
@@ -201,17 +207,12 @@ public class GeminiClient : MonoBehaviour
     {
         if (msg.content == null) return;
 
-        // 감정 적용
-        if (!string.IsNullOrEmpty(msg.content.emotionLabel) && interviewer != null)
-            interviewer.SetMood(EmotionLabelToMood(msg.content.emotionLabel));
+        // 자막 + 면접관 감정/입모양 (화면 표현)
+        Helper.Instance.PlayResponse(msg.content.text, EmotionLabelToMood(msg.content.emotionLabel));
 
-        // 자막 + TTS
+        // 실제 음성 재생 (TTS)
         if (!string.IsNullOrEmpty(msg.content.text))
-        {
-            subtitleManager?.DisplaySubtitle(msg.content.text);
-            interviewer?.StartSpeaking();
             JS_Speak(msg.content.text);
-        }
     }
 
     private void HandleError(string errorMsg)
@@ -230,17 +231,18 @@ public class GeminiClient : MonoBehaviour
 
     private static string EmotionLabelToMood(string label)
     {
-        if (label.Contains("압박"))  return "Pressuring";
+        if (string.IsNullOrEmpty(label)) return "Neutral";
+        if (label.Contains("압박")) return "Pressuring";
         if (label.Contains("호기심")) return "Neutral";
-        if (label.Contains("기쁨"))  return "Smile";
-        if (label.Contains("당혹"))  return "Confused";
-        if (label.Contains("정중"))  return "Satisfied";
+        if (label.Contains("기쁨")) return "Smile";
+        if (label.Contains("당혹")) return "Confused";
+        if (label.Contains("정중")) return "Satisfied";
         return "Neutral";
     }
 
     // ─── 내부 패킷 타입 ────────────────────────────────────────────────────
 
-    [Serializable] private class TypeOnly    { public string type; }
+    [Serializable] private class TypeOnly { public string type; }
     [Serializable] private class ErrorPacket { public string type; public string message; }
 
     [Serializable]
