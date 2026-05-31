@@ -99,6 +99,7 @@ public class GeminiClient : MonoBehaviour
             Debug.LogWarning("[GeminiClient] relay가 아직 준비되지 않았습니다.");
             return;
         }
+        Helper.Instance.AddUserEntry(text);
         Send(JsonUtility.ToJson(new UserSpeechPacket
         {
             type = "user_speech",
@@ -109,14 +110,14 @@ public class GeminiClient : MonoBehaviour
     /// <summary>마이크 녹음을 시작합니다 (Web Speech API STT).</summary>
     public void StartListening()
     {
-        Helper.Instance.SetMicState(MicDisplayController.WaveState.Listening);
+        Helper.Instance.StartListening();
         JS_StartSTT();
     }
 
     /// <summary>마이크 녹음을 중지합니다.</summary>
     public void StopListening()
     {
-        Helper.Instance.SetMicState(MicDisplayController.WaveState.Done);
+        Helper.Instance.StopListening();
         JS_StopSTT();
     }
 
