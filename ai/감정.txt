@@ -1,0 +1,7 @@
+neutral 중립
+smile 미소
+shy 부끄러움
+serious 진지
+confused 혼란
+pressuring 압박
+satisfied 만족
