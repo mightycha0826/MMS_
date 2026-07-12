@@ -13,6 +13,10 @@ public class GeminiClient : MonoBehaviour
 {
     [Header("Relay 설정")]
     [SerializeField] private string relayUrl = "wss://gemini-relay.mightycha0826.workers.dev";
+    [SerializeField] private string department = "";
+
+    [Header("오디오 재생 (Supertone TTS)")]
+    [SerializeField] private AudioSource audioSource;
 
     public event Action<ServerMsg> OnServerContent;
     public event Action OnReady;
@@ -21,6 +25,10 @@ public class GeminiClient : MonoBehaviour
 
     private WebSocket _ws;
     private bool _isReady;
+
+    // relay가 더 이상 세션 상태를 기억하지 않으므로, 마지막으로 받은 질문을
+    // Unity가 들고 있다가 매 턴 client_msg에 다시 실어 보낸다.
+    private string _lastQuestion = "";
 
     // ─── JS 브리지 (Web Speech API) ───────────────────────────────────────
 
@@ -79,17 +87,23 @@ public class GeminiClient : MonoBehaviour
 
     // ─── 공개 API ──────────────────────────────────────────────────────────
 
-    /// <summary>면접 세션을 시작합니다.</summary>
-    public void SendSessionStart(string lastQuestion = "")
+    /// <summary>지원 학과를 설정합니다. 이후 매 client_msg에 함께 실려 갑니다.</summary>
+    public void SetDepartment(string dept)
     {
-        Send(JsonUtility.ToJson(new SessionStartPacket
-        {
-            type = "session_start",
-            last_question = lastQuestion,
-        }));
+        department = dept;
     }
 
-    /// <summary>지원자 답변 텍스트를 relay로 전송합니다.</summary>
+    /// <summary>
+    /// 면접관의 첫 질문(오프닝 멘트)을 초기 last_question 상태로 등록합니다.
+    /// 더 이상 별도 네트워크 메시지를 보내지 않습니다 — session_start 타입이 폐지되었기 때문에
+    /// 이 값은 다음 SendUserSpeech 호출 때 client_msg.last_question으로 실려 나갑니다.
+    /// </summary>
+    public void SendSessionStart(string lastQuestion = "")
+    {
+        _lastQuestion = lastQuestion;
+    }
+
+    /// <summary>지원자 답변 텍스트를 relay로 전송합니다 (client_msg 통합 포맷).</summary>
     public void SendUserSpeech(string text)
     {
         if (!_isReady)
@@ -97,11 +111,26 @@ public class GeminiClient : MonoBehaviour
             Debug.LogWarning("[GeminiClient] relay가 아직 준비되지 않았습니다.");
             return;
         }
-        Send(JsonUtility.ToJson(new UserSpeechPacket
+
+        Send(JsonUtility.ToJson(new ClientMsg
         {
-            type = "user_speech",
+            type = "client_msg",
+            department = string.IsNullOrEmpty(department) ? "미지정" : department,
+            last_question = _lastQuestion,
             text = text,
         }));
+    }
+
+    /// <summary>Web Speech API STT 결과 수신 (WebSpeech.jslib → SendMessage로 호출).</summary>
+    public void OnSpeechResult(string text)
+    {
+        StopListening();
+        SendUserSpeech(text);
+    }
+
+    /// <summary>TTS 재생 종료 알림 (WebSpeech.jslib → SendMessage로 호출).</summary>
+    public void OnTTSEnd()
+    {
     }
 
     /// <summary>마이크 녹음을 시작합니다 (Web Speech API STT).</summary>
@@ -167,6 +196,7 @@ public class GeminiClient : MonoBehaviour
 
                 case "error":
                     var errPkt = JsonUtility.FromJson<ErrorPacket>(json);
+                    // "AI worker not connected" 등 - Python AI 프로세스가 아직 안 떠 있을 때도 여기로 들어옴
                     Debug.LogError($"[GeminiClient] 서버 오류: {errPkt.message}");
                     OnError?.Invoke(errPkt.message);
                     break;
@@ -186,7 +216,19 @@ public class GeminiClient : MonoBehaviour
     {
         if (msg.content == null) return;
 
-        Helper.Instance.PlayResponse(msg.content.text, EmotionLabelToMood(msg.content.emotionLabel));
+        // 서버가 세션을 기억하지 않으므로, 다음 턴 client_msg.last_question으로 다시 실어 보낼 값을 저장
+        if (!string.IsNullOrEmpty(msg.content.text))
+            _lastQuestion = msg.content.text;
+
+        // emotion.label은 영문 enum(neutral/smile/shy/...)이라 InterviewerMood 이름과 그대로 일치함
+        string mood = msg.content.emotion != null ? msg.content.emotion.label : "neutral";
+        Helper.Instance.PlayResponse(msg.content.text, mood);
+
+        // decision(follow_up/next_topic) 필드는 프로토콜에서 삭제됨 - 더 이상 주제전환 여부를 서버가 알려주지 않음
+
+        if (!string.IsNullOrEmpty(msg.content.audio))
+            PlayTtsAudio(msg.content.audio);
+        // audio가 없으면 Helper.PlayResponse가 처리하는 기존 Web Speech TTS 경로로 폴백
     }
 
     private void HandleError(string errorMsg)
@@ -201,34 +243,73 @@ public class GeminiClient : MonoBehaviour
         Debug.Log($"[GeminiClient] 연결 종료: {code}");
     }
 
-    // ─── 감정 레이블 → InterviewerMood 변환 ───────────────────────────────
+    // ─── TTS 오디오 (Supertone, base64 WAV) ───────────────────────────────
 
-    private static string EmotionLabelToMood(string label)
+    private void PlayTtsAudio(string base64Wav)
     {
-        if (label.Contains("압박")) return "Pressuring";
-        if (label.Contains("호기심")) return "Neutral";
-        if (label.Contains("기쁨")) return "Smile";
-        if (label.Contains("당혹")) return "Confused";
-        if (label.Contains("정중")) return "Satisfied";
-        return "Neutral";
+        if (audioSource == null)
+        {
+            Debug.LogWarning("[GeminiClient] audioSource가 지정되지 않아 오디오 재생을 건너뜁니다.");
+            return;
+        }
+
+        try
+        {
+            byte[] wavBytes = Convert.FromBase64String(base64Wav);
+            AudioClip clip = WavToAudioClip(wavBytes, "tts_response");
+            if (clip != null)
+            {
+                audioSource.clip = clip;
+                audioSource.Play();
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[GeminiClient] TTS 오디오 디코딩 실패: {e.Message}");
+        }
+    }
+
+    private static AudioClip WavToAudioClip(byte[] wav, string clipName)
+    {
+        int channels = BitConverter.ToInt16(wav, 22);
+        int sampleRate = BitConverter.ToInt32(wav, 24);
+        int bitsPerSample = BitConverter.ToInt16(wav, 34);
+
+        int dataChunkOffset = FindChunkOffset(wav, "data");
+        if (dataChunkOffset < 0 || bitsPerSample != 16)
+        {
+            Debug.LogWarning($"[GeminiClient] 지원하지 않는 WAV 형식 (bits={bitsPerSample})");
+            return null;
+        }
+
+        int dataSize = BitConverter.ToInt32(wav, dataChunkOffset - 4);
+        int sampleCount = dataSize / 2;
+        float[] samples = new float[sampleCount];
+
+        for (int i = 0; i < sampleCount; i++)
+        {
+            short raw = BitConverter.ToInt16(wav, dataChunkOffset + i * 2);
+            samples[i] = raw / 32768f;
+        }
+
+        AudioClip clip = AudioClip.Create(clipName, sampleCount / Mathf.Max(channels, 1), channels, sampleRate, false);
+        clip.SetData(samples, 0);
+        return clip;
+    }
+
+    private static int FindChunkOffset(byte[] data, string chunkId)
+    {
+        byte[] id = System.Text.Encoding.ASCII.GetBytes(chunkId);
+        for (int i = 12; i <= data.Length - 8; i++)
+        {
+            if (data[i] == id[0] && data[i + 1] == id[1] && data[i + 2] == id[2] && data[i + 3] == id[3])
+                return i + 8;
+        }
+        return -1;
     }
 
     // ─── 내부 패킷 타입 ────────────────────────────────────────────────────
 
     [Serializable] private class TypeOnly { public string type; }
     [Serializable] private class ErrorPacket { public string type; public string message; }
-
-    [Serializable]
-    private class SessionStartPacket
-    {
-        public string type;
-        public string last_question;
-    }
-
-    [Serializable]
-    private class UserSpeechPacket
-    {
-        public string type;
-        public string text;
-    }
 }
