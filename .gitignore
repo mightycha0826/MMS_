@@ -1,1 +1,4 @@
 .claude/
+
+# Supertone TTS API 키 - 실제 값은 커밋하지 않음 (supertone_config.sample.json 참고)
+StreamingAssets/supertone_config.json

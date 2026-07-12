@@ -29,7 +29,8 @@ public class ServerContent
 {
     public string text;
     public EmotionInfo emotion;
-    public string audio; // base64 WAV (Supertone TTS), 없을 수 있음
+    // audio 필드는 삭제됨 - relay는 더 이상 TTS를 처리하지 않음.
+    // content.text를 SupertoneTtsClient로 넘겨 Unity가 직접 TTS를 생성한다.
 }
 
 [Serializable]
