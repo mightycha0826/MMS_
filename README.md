@@ -32,21 +32,15 @@ MMS_/
 ## 전체 아키텍처
 
 ```
-[Unity — 정해운찬/정형태 담당]              [gemini-relay — 차유근 담당]
-        │                                           │
-  GeminiClient.cs                             index.ts
-  (WebSocket + JSON)   ──wss://──────▶   (Cloudflare Worker)
-                                                    │
-                                          ┌─────────┴──────────┐
-                                          ▼                     ▼
-                                     Gemini API           HuggingFace
-                                    (답변 분석)          (LoRA 모델 추론)
+[Unity — 정해운찬/정형태 담당]              [gemini-relay — 차유근 담당]              [interview_question_generator.py]
+        │                                           │                                          │
+  GeminiClient.cs                             index.ts                                   Gemini + Gemma LoRA
+  (WebSocket + JSON)   ──wss://──────▶   (Cloudflare Worker, 중계 전용)   ──────▶   (질문/감정 분석 전담)
 ```
 
-- **Unity** : 면접 UI, Web Speech API로 STT/TTS 처리
-- **gemini-relay** : Cloudflare Worker 중계 서버, AI 판단 로직 담당
-- **Gemini 2.5 Flash** : 지원자 답변 품질 분석
-- **HuggingFace LoRA** : 다음 질문 결정 (`ai-mms/ai-gemma-lora-model`)
+- **Unity** : 면접 UI, Web Speech API로 STT/TTS 처리 (또는 서버가 준 오디오 재생)
+- **gemini-relay** : Cloudflare Worker, Unity ↔ Python 간 메시지 중계만 담당 (AI 호출 없음)
+- **interview_question_generator.py** : Gemini 답변 분석 + Gemma LoRA 질문 생성, 감정/학과 판단을 전담
 
 ---
 
@@ -79,12 +73,12 @@ python ai/interview_question_generator.py --file 자료.pdf --adapter . --GEMINI
 
 ```
 1. [Unity]   Web Speech API로 지원자 음성 → 텍스트 변환 (STT)
-2. [Unity]   GeminiClient.cs → relay로 전송 (wss://)
-3. [relay]   Gemini API에 답변 분석 요청
-             → "'키워드' 언급했으나 메커니즘 설명 없음. 꼬리질문으로 검증 필요."
-4. [relay]   HuggingFace LoRA 모델에 다음 행동 결정 요청
-             → { text, decision, emotionLabel }
-5. [Unity]   결과 수신 → 자막 출력 + 면접관 감정 변경 + TTS 재생
+2. [Unity]   GeminiClient.cs → relay로 client_msg 전송 (department + last_question + text, 매 턴 재전송)
+3. [relay]   Python(interview_question_generator.py)으로 메시지 중계
+4. [Python]  Gemini로 답변 분석 → Gemma LoRA로 다음 질문/감정 결정
+             → { text, emotion: { label, score, intensity, action }, audio? }
+5. [Unity]   결과 수신 → 자막 출력 + 면접관 감정 변경 + (audio가 있으면 재생, 없으면 기존 TTS 폴백)
+             → content.text를 다음 턴 last_question으로 저장해뒀다가 다시 전송
 ```
 
 ---
@@ -93,12 +87,15 @@ python ai/interview_question_generator.py --file 자료.pdf --adapter . --GEMINI
 
 ### Unity → relay
 
-```json
-// 1. 면접 세션 시작
-{ "type": "session_start", "last_question": "자기소개 해주세요" }
+매 턴마다 `client_msg` 하나로 통합해서 보냄. 서버가 세션 상태를 기억하지 않으므로 `last_question`을 매번 다시 실어야 함.
 
-// 2. 지원자 답변 전송 (Web Speech API 결과)
-{ "type": "user_speech", "text": "안녕하세요, 저는..." }
+```json
+{
+  "type": "client_msg",
+  "department": "인공지능학과",
+  "last_question": "자기소개 해주세요",
+  "text": "안녕하세요, 저는..."
+}
 ```
 
 ### relay → Unity
@@ -114,36 +111,47 @@ python ai/interview_question_generator.py --file 자료.pdf --adapter . --GEMINI
 {
   "type": "server_content",
   "message_id": "uuid",
+  "client_session_id": "라우팅용 ID",
   "content": {
     "text": "딥러닝에서 역전파 알고리즘을 직접 구현해본 경험이 있나요?",
-    "decision": "follow_up",
-    "emotionLabel": "호기심/탐색"
+    "emotion": {
+      "label": "serious",
+      "score": 0.8,
+      "intensity": "medium",
+      "action": "avatar_stern"
+    },
+    "audio": "base64 WAV (Supertone TTS, 없을 수 있음)"
   },
-  "stt_result": "안녕하세요, 저는...",
+  "gemini_analysis": {
+    "dept": "인공지능학과",
+    "dept_reasoning": "...",
+    "keywords": ["역전파", "경사하강법"],
+    "summary": "..."
+  },
   "usage": { "timestamp": "2026-..." }
 }
 
-// 에러
-{ "type": "error", "message": "에러 내용" }
+// 에러 (Python AI 프로세스 미연결 등)
+{ "type": "error", "message": "AI worker not connected" }
 ```
 
-| `decision` | 의미 |
-|-----------|------|
-| `follow_up` | 꼬리질문 — 같은 주제에서 더 깊이 파고들기 |
-| `next_topic` | 주제 전환 — 다음 평가 항목으로 이동 |
+> `decision`, `emotionLabel`(한글), `stt_result` 필드는 이 프로토콜에서 삭제되었습니다.
 
 ---
 
 ## 면접관 감정 레이블
 
-| 감정 | 레이블 예시 | 아바타 액션 |
-|------|-----------|------------|
-| 압박 | `날카로움/압박`, `압박/재질문` | avatar_stern |
-| 호기심 | `호기심/탐색`, `호기심/기대` | avatar_curious |
-| 기쁨 | `기쁨/격려`, `기쁨/지지` | avatar_smile |
-| 당혹 | `당혹/재질문`, `당혹/확인` | avatar_tilt |
-| 중립 | `중립/전환`, `중립/마무리` | avatar_neutral |
-| 정중 | `정중함/마무리`, `정중/전환` | avatar_nod |
+`emotion.label`은 `InterviewerController.InterviewerMood` enum과 동일한 이름(대소문자 무관)으로 옵니다.
+
+| `emotion.label` | 아바타 액션 |
+|-----------------|------------|
+| `pressuring` | avatar_stern |
+| `neutral` | avatar_neutral |
+| `smile` | avatar_smile |
+| `shy` | avatar_shy |
+| `serious` | avatar_serious |
+| `confused` | avatar_tilt |
+| `satisfied` | avatar_nod |
 
 ---
 
