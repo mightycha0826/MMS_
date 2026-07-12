@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Runtime.InteropServices;
 using UnityEngine;
@@ -15,8 +15,8 @@ public class GeminiClient : MonoBehaviour
     [SerializeField] private string relayUrl = "wss://gemini-relay.mightycha0826.workers.dev";
     [SerializeField] private string department = "";
 
-    [Header("TTS (Supertone, Unity가 직접 호출)")]
-    [SerializeField] private SupertoneTtsClient ttsClient;
+    [Header("오디오 재생 (Supertone TTS)")]
+    [SerializeField] private AudioSource audioSource;
 
     public event Action<ServerMsg> OnServerContent;
     public event Action OnReady;
@@ -226,10 +226,9 @@ public class GeminiClient : MonoBehaviour
 
         // decision(follow_up/next_topic) 필드는 프로토콜에서 삭제됨 - 더 이상 주제전환 여부를 서버가 알려주지 않음
 
-        // relay는 더 이상 TTS를 처리하지 않으므로, Unity가 직접 Supertone을 호출해 재생한다.
-        // 실패해도 SupertoneTtsClient 내부에서 조용히 건너뛰므로 자막 표시(Helper.PlayResponse)는 항상 진행된다.
-        if (ttsClient != null)
-            ttsClient.PlayTts(msg.content.text);
+        if (!string.IsNullOrEmpty(msg.content.audio))
+            PlayTtsAudio(msg.content.audio);
+        // audio가 없으면 Helper.PlayResponse가 처리하는 기존 Web Speech TTS 경로로 폴백
     }
 
     private void HandleError(string errorMsg)
@@ -242,6 +241,71 @@ public class GeminiClient : MonoBehaviour
     {
         _isReady = false;
         Debug.Log($"[GeminiClient] 연결 종료: {code}");
+    }
+
+    // ─── TTS 오디오 (Supertone, base64 WAV) ───────────────────────────────
+
+    private void PlayTtsAudio(string base64Wav)
+    {
+        if (audioSource == null)
+        {
+            Debug.LogWarning("[GeminiClient] audioSource가 지정되지 않아 오디오 재생을 건너뜁니다.");
+            return;
+        }
+
+        try
+        {
+            byte[] wavBytes = Convert.FromBase64String(base64Wav);
+            AudioClip clip = WavToAudioClip(wavBytes, "tts_response");
+            if (clip != null)
+            {
+                audioSource.clip = clip;
+                audioSource.Play();
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[GeminiClient] TTS 오디오 디코딩 실패: {e.Message}");
+        }
+    }
+
+    private static AudioClip WavToAudioClip(byte[] wav, string clipName)
+    {
+        int channels = BitConverter.ToInt16(wav, 22);
+        int sampleRate = BitConverter.ToInt32(wav, 24);
+        int bitsPerSample = BitConverter.ToInt16(wav, 34);
+
+        int dataChunkOffset = FindChunkOffset(wav, "data");
+        if (dataChunkOffset < 0 || bitsPerSample != 16)
+        {
+            Debug.LogWarning($"[GeminiClient] 지원하지 않는 WAV 형식 (bits={bitsPerSample})");
+            return null;
+        }
+
+        int dataSize = BitConverter.ToInt32(wav, dataChunkOffset - 4);
+        int sampleCount = dataSize / 2;
+        float[] samples = new float[sampleCount];
+
+        for (int i = 0; i < sampleCount; i++)
+        {
+            short raw = BitConverter.ToInt16(wav, dataChunkOffset + i * 2);
+            samples[i] = raw / 32768f;
+        }
+
+        AudioClip clip = AudioClip.Create(clipName, sampleCount / Mathf.Max(channels, 1), channels, sampleRate, false);
+        clip.SetData(samples, 0);
+        return clip;
+    }
+
+    private static int FindChunkOffset(byte[] data, string chunkId)
+    {
+        byte[] id = System.Text.Encoding.ASCII.GetBytes(chunkId);
+        for (int i = 12; i <= data.Length - 8; i++)
+        {
+            if (data[i] == id[0] && data[i + 1] == id[1] && data[i + 2] == id[2] && data[i + 3] == id[3])
+                return i + 8;
+        }
+        return -1;
     }
 
     // ─── 내부 패킷 타입 ────────────────────────────────────────────────────
