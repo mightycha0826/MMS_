@@ -50,7 +50,7 @@ public class IntroAnimator : MonoBehaviour
             yield return null;
         }
 
-        // Á¤È®È÷ ¸¶¹«¸®
+        // ì •í™•ížˆ ë§ˆë¬´ë¦¬
         SetAlpha(fadeOverlay, 0f);
         fadeOverlay.gameObject.SetActive(false);
         if (characterGroup != null) characterGroup.alpha = 1f;

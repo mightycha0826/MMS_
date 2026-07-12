@@ -35,12 +35,12 @@ public class ChatHistorySidebar : MonoBehaviour
 
     private void Start()
     {
-        // À§Ä¡ Ä¸Ã³ (·¹ÀÌ¾Æ¿ô ¿Ï·á ÈÄ)
+        // ìœ„ì¹˜ ìº¡ì²˜ (ë ˆì´ì•„ì›ƒ ì™„ë£Œ í›„)
         Canvas.ForceUpdateCanvases();
         shownPos = sidebarRect.anchoredPosition;
         hiddenPos = shownPos + Vector2.left * slideOffset;
 
-        // ½ÃÀÛ »óÅÂ: ¼û±è
+        // ì‹œì‘ ìƒíƒœ: ìˆ¨ê¹€
         sidebarRect.anchoredPosition = hiddenPos;
         if (sidebarGroup != null)
         {
@@ -53,12 +53,12 @@ public class ChatHistorySidebar : MonoBehaviour
             dimGroup.blocksRaycasts = false;
         }
 
-        // ¹öÆ° ¿¬°á
+        // ë²„íŠ¼ ì—°ê²°
         if (openButton != null) openButton.onClick.AddListener(Open);
         if (closeButton != null) closeButton.onClick.AddListener(Close);
         if (dimClickToClose != null) dimClickToClose.onClick.AddListener(Close);
 
-        // ¸Å´ÏÀú ÀÌº¥Æ® ±¸µ¶
+        // ë§¤ë‹ˆì € ì´ë²¤íŠ¸ êµ¬ë…
         if (historyManager != null)
             historyManager.OnEntryAdded.AddListener(AddBubble);
 
@@ -71,7 +71,7 @@ public class ChatHistorySidebar : MonoBehaviour
             historyManager.OnEntryAdded.RemoveListener(AddBubble);
     }
 
-    // ¦¡¦¡ »çÀÌµå¹Ù ¿­±â/´İ±â ¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡
+    // â”€â”€ ì‚¬ì´ë“œë°” ì—´ê¸°/ë‹«ê¸° â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     public void Open()
     {
@@ -121,7 +121,7 @@ public class ChatHistorySidebar : MonoBehaviour
         if (dimGroup != null) dimGroup.alpha = targetAlpha * 0.6f;
     }
 
-    // ¦¡¦¡ ¹öºí »ı¼º ¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡
+    // â”€â”€ ë²„ë¸” ìƒì„± â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     public void AddBubble(ChatEntry entry)
     {
@@ -135,7 +135,7 @@ public class ChatHistorySidebar : MonoBehaviour
 
         UpdateEmptyHint();
 
-        // ½ºÅ©·Ñ °¡Àå ¾Æ·¡·Î
+        // ìŠ¤í¬ë¡¤ ê°€ì¥ ì•„ë˜ë¡œ
         StartCoroutine(ScrollToBottom());
     }
 

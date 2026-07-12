@@ -19,7 +19,7 @@ public class AnswerInputController : MonoBehaviour
             sendButton.onClick.AddListener(Submit);
 
         if (answerInput != null)
-            answerInput.onSubmit.AddListener(_ => Submit()); // ¿£ÅÍ
+            answerInput.onSubmit.AddListener(_ => Submit()); // ì—”í„°
 
         UpdateSendButtonState();
     }

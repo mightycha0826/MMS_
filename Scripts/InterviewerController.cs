@@ -16,13 +16,13 @@ public class InterviewerController : MonoBehaviour
 
     public enum InterviewerMood
     {
-        Neutral,        // Áß¸³
-        Smile,          // ¹Ì¼Ò
-        Shy,            // ºÎ²ô·¯¿ò
-        Serious,        // ÁøÁöÇÔ
-        Confused,       // ´çÈ²
-        Pressuring,     // ¾Ğ¹Ú
-        Satisfied       // ¸¸Á·
+        Neutral,        // ì¤‘ë¦½
+        Smile,          // ë¯¸ì†Œ
+        Shy,            // ë¶€ë„ëŸ¬ì›€
+        Serious,        // ì§„ì§€í•¨
+        Confused,       // ë‹¹í™©
+        Pressuring,     // ì••ë°•
+        Satisfied       // ë§Œì¡±
     }
 
     [SerializeField] private RawImage characterImageDisplay;
@@ -45,13 +45,13 @@ public class InterviewerController : MonoBehaviour
     private static readonly Dictionary<InterviewerMood, string> MoodLabels
         = new Dictionary<InterviewerMood, string>
     {
-    { InterviewerMood.Neutral,    "Áß¸³"     },
-    { InterviewerMood.Smile,      "¹Ì¼Ò"     },
-    { InterviewerMood.Shy,        "ºÎ²ô·¯¿ò" },
-    { InterviewerMood.Serious,    "ÁøÁöÇÔ"   },
-    { InterviewerMood.Confused,   "´çÈ²"     },
-    { InterviewerMood.Pressuring, "¾Ğ¹Ú"     },
-    { InterviewerMood.Satisfied,  "¸¸Á·"     },
+    { InterviewerMood.Neutral,    "ì¤‘ë¦½"     },
+    { InterviewerMood.Smile,      "ë¯¸ì†Œ"     },
+    { InterviewerMood.Shy,        "ë¶€ë„ëŸ¬ì›€" },
+    { InterviewerMood.Serious,    "ì§„ì§€í•¨"   },
+    { InterviewerMood.Confused,   "ë‹¹í™©"     },
+    { InterviewerMood.Pressuring, "ì••ë°•"     },
+    { InterviewerMood.Satisfied,  "ë§Œì¡±"     },
     };
 
     private void Start()

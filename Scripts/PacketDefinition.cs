@@ -1,27 +1,27 @@
 using System;
 
-// ¦¡¦¡¦¡ Unity -> relay (º¸³»´Â ¸Ş½ÃÁö) ¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡
-// ¸Å ÅÏ¸¶´Ù ÀÌ ÇÏ³ª·Î ÅëÇÕÇØ¼­ º¸³¿ (¼­¹ö°¡ ¼¼¼Ç »óÅÂ¸¦ ±â¾ïÇÏÁö ¾ÊÀ¸¹Ç·Î
-// last_questionÀ» ¸Å¹ø ´Ù½Ã ½Ç¾î º¸³»¾ß ÇÔ)
+// â”€â”€â”€ Unity -> relay (ë³´ë‚´ëŠ” ë©”ì‹œì§€) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ë§¤ í„´ë§ˆë‹¤ ì´ í•˜ë‚˜ë¡œ í†µí•©í•´ì„œ ë³´ëƒ„ (ì„œë²„ê°€ ì„¸ì…˜ ìƒíƒœë¥¼ ê¸°ì–µí•˜ì§€ ì•Šìœ¼ë¯€ë¡œ
+// last_questionì„ ë§¤ë²ˆ ë‹¤ì‹œ ì‹¤ì–´ ë³´ë‚´ì•¼ í•¨)
 [Serializable]
 public class ClientMsg
 {
-    public string type; // "client_msg" °íÁ¤
-    public string department;    // Áö¿ø ÇĞ°ú, ¾øÀ¸¸é ¼­¹ö°¡ "¹ÌÁöÁ¤" Ã³¸®
-    public string last_question; // Á÷Àü ¸éÁ¢°ü Áú¹®
-    public string text;          // Áö¿øÀÚ ´äº¯ ÅØ½ºÆ®
+    public string type; // "client_msg" ê³ ì •
+    public string department;    // ì§€ì› í•™ê³¼, ì—†ìœ¼ë©´ ì„œë²„ê°€ "ë¯¸ì§€ì •" ì²˜ë¦¬
+    public string last_question; // ì§ì „ ë©´ì ‘ê´€ ì§ˆë¬¸
+    public string text;          // ì§€ì›ì ë‹µë³€ í…ìŠ¤íŠ¸
 }
 
-// ¦¡¦¡¦¡ relay -> Unity (¹Ş´Â ¸Ş½ÃÁö) ¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡¦¡
+// â”€â”€â”€ relay -> Unity (ë°›ëŠ” ë©”ì‹œì§€) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 [Serializable]
 public class ServerMsg
 {
     public string type; // "ready", "processing", "server_content", "error"
     public string message_id;
-    public string client_session_id; // ¶ó¿ìÆÃ¿ë ID, º¸Åë ÂüÁ¶ ºÒÇÊ¿ä
+    public string client_session_id; // ë¼ìš°íŒ…ìš© ID, ë³´í†µ ì°¸ì¡° ë¶ˆí•„ìš”
     public ServerContent content;
     public GeminiAnalysis gemini_analysis;
-    public string message; // error¿ë
+    public string message; // errorìš©
 }
 
 [Serializable]
@@ -29,7 +29,8 @@ public class ServerContent
 {
     public string text;
     public EmotionInfo emotion;
-    public string audio; // base64 WAV (Supertone TTS), ¾øÀ» ¼ö ÀÖÀ½
+    // audio í•„ë“œ ì—†ìŒ - relayëŠ” TTSë¥¼ ì²˜ë¦¬í•˜ì§€ ì•ŠëŠ”ë‹¤.
+    // content.textë¥¼ ë°›ì€ ë’¤ VoiceGeneratorê°€ Unityì—ì„œ ì§ì ‘ Supertone TTSë¥¼ í˜¸ì¶œí•œë‹¤.
 }
 
 [Serializable]

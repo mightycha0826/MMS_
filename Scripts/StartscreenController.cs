@@ -46,18 +46,18 @@ public class StartScreenController : MonoBehaviour
 
     private IEnumerator TransitionSequence()
     {
-        // 1. ¾ÏÀü
+        // 1. ì•”ì „
         yield return StartCoroutine(FadeOverlay(0f, 1f, fadeOutDuration));
 
-        // 2. ¾ÏÀü À¯Áö
+        // 2. ì•”ì „ ìœ ì§€
         yield return new WaitForSeconds(blackHoldDuration);
 
-        // 3. ½ÃÀÛÈ­¸é ²ô°í ¸ŞÀÎÈ­¸é ÄÑ±â
+        // 3. ì‹œì‘í™”ë©´ ë„ê³  ë©”ì¸í™”ë©´ ì¼œê¸°
         startScreenGroup.gameObject.SetActive(false);
         mainScreen.SetActive(true);
 
         gameObject.GetComponent<HUDController>().StartTimer();
-        // 4. ¿À¹ö·¹ÀÌ ÇØÁ¦ + µîÀå ¾Ö´Ï¸ŞÀÌ¼Ç
+        // 4. ì˜¤ë²„ë ˆì´ í•´ì œ + ë“±ì¥ ì• ë‹ˆë©”ì´ì…˜
         yield return StartCoroutine(introAnimator.PlayIntro(fadeOverlay));
     }
 
